@@ -96,6 +96,16 @@ has its own scoped copy:
 pnpm test               # all JS packages (vitest)
 pnpm test:e2e           # Playwright smoke tests against localhost:3000
 cd services/ai && uv run pytest
+
+# or 
+pnpm install                                                                                                                                                            
+cd services/ai && uv sync && cd -
+
+pnpm --filter @remy/api db:generate
+pnpm --filter @remy/api db:migrate
+
+pnpm dev
+pnpm dev:ai
 ```
 
 What's covered:
