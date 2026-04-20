@@ -1,0 +1,64 @@
+# deps
+node_modules/
+.pnpm-store/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.python-version
+
+# build
+.next/
+.turbo/
+dist/
+build/
+out/
+*.tsbuildinfo
+.env.production
+
+# env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# ide
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# test
+coverage/
+.nyc_output/
+*.lcov
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+
+# terraform
+infra/terraform/.terraform/
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.backup
+infra/terraform/*.tfvars
+!infra/terraform/*.tfvars.example
+infra/terraform/crash.log
+infra/terraform/.terraform.lock.hcl
+
+# runtime / data
+/tmp/
+/logs/
+*.log
+.prisma/
+/apps/api/prisma/dev.db*
+
+# comfyui
+services/comfyui/models/
+services/comfyui/output/
+services/comfyui/input/
+services/comfyui/custom_nodes/*/
+!services/comfyui/custom_nodes/.gitkeep
+
+# misc
+.sentryclirc

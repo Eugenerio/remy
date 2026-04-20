@@ -1,0 +1,13 @@
+process.env.NODE_ENV = 'test';
+process.env.LOG_LEVEL = 'error';
+process.env.SUPABASE_URL ??= 'http://localhost:54321';
+process.env.SUPABASE_ANON_KEY ??= 'test-anon-key';
+process.env.SUPABASE_SERVICE_ROLE_KEY ??= 'test-service-role-key';
+process.env.SUPABASE_JWT_SECRET ??= 'test-jwt-secret-at-least-32-bytes-long';
+process.env.INTERNAL_SERVICE_TOKEN ??= 'test-internal-service-token-0123456';
+process.env.PUBLIC_APP_URL ??= 'http://localhost:3000';
+process.env.PUBLIC_AI_URL ??= 'http://localhost:8001';
+process.env.DATABASE_URL ??= 'postgresql://postgres:postgres@localhost:5432/postgres?schema=public';
+process.env.DIRECT_URL ??= process.env.DATABASE_URL;
+process.env.REDIS_URL ??= 'redis://localhost:6379';
+process.env.ADMIN_EMAILS ??= 'admin@remy.local';

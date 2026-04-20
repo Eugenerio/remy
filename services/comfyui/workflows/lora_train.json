@@ -1,0 +1,19 @@
+{
+  "_comment": "Placeholder LoRA training workflow. Replace with your real ComfyUI LoRA trainer (e.g. kohya-ss via ComfyUI custom nodes) before production use. Keys used by services/modal/app.py::lora_train: dataset_path, output_name.",
+  "10": {
+    "class_type": "LoraTrainer",
+    "inputs": {
+      "dataset_path": "REPLACE",
+      "output_name": "REPLACE",
+      "base_model": "flux1-dev.safetensors",
+      "network_dim": 32,
+      "network_alpha": 16,
+      "learning_rate": 0.0001,
+      "max_train_steps": 1200,
+      "resolution": 768,
+      "save_every_n_steps": 400,
+      "optimizer": "adamw8bit",
+      "mixed_precision": "bf16"
+    }
+  }
+}

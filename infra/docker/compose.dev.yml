@@ -1,0 +1,40 @@
+version: '3.9'
+
+# ---------------------------------------------------------------------------
+# Local dev companion services.
+#
+# Database and auth are served by the Supabase CLI (`supabase start`) — run
+# it separately. This file only runs the extras Supabase doesn't: Redis for
+# BullMQ, and a local ComfyUI stub for smoke tests (real generation goes
+# through Modal). Stripe is tested via `stripe listen`.
+# ---------------------------------------------------------------------------
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: remy-redis
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Optional: local ComfyUI stub that returns canned responses. Use
+  # MOCK_COMFY=1 in the AI service to hit this for pipeline tests.
+  comfyui-stub:
+    build:
+      context: ../../services/ai
+      dockerfile: Dockerfile.stub
+    container_name: remy-comfyui-stub
+    ports:
+      - '8188:8188'
+    environment:
+      PYTHONUNBUFFERED: 1
+    profiles: ['ai']
+
+volumes:
+  redis-data:

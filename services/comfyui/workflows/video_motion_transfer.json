@@ -1,0 +1,35 @@
+{
+  "_comment": "Placeholder motion-transfer workflow (e.g. Wan 2.2 + CogVideoX motion module). Keys used by services/modal/app.py::video_gen: ref_image, ref_video, frames, width, height, seed.",
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": { "image": "REPLACE", "ref_image": "REPLACE" }
+  },
+  "2": {
+    "class_type": "LoadVideo",
+    "inputs": { "video": "REPLACE", "ref_video": "REPLACE" }
+  },
+  "3": {
+    "class_type": "MotionTransferPipeline",
+    "inputs": {
+      "reference_image": ["1", 0],
+      "motion_source": ["2", 0],
+      "width": 720,
+      "height": 1280,
+      "frames": 120,
+      "seed": 0,
+      "motion_prompt_strength": 1.0,
+      "identity_preservation_strength": 0.95,
+      "physics_guidance_strength": 0.8
+    }
+  },
+  "4": {
+    "class_type": "VideoCombine",
+    "inputs": {
+      "images": ["3", 0],
+      "frame_rate": 24,
+      "filename_prefix": "remy_gen",
+      "format": "mp4",
+      "crf": 21
+    }
+  }
+}

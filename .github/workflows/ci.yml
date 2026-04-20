@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  NODE_VERSION: '20.11.1'
+  PNPM_VERSION: '9.12.3'
+
+jobs:
+  js:
+    name: JS — typecheck, lint, test, build
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+      - name: Install
+        run: pnpm install --frozen-lockfile=false
+      - name: Prisma generate
+        run: pnpm --filter @remy/api db:generate
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres?schema=public
+          DIRECT_URL: postgresql://postgres:postgres@localhost:5432/postgres?schema=public
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Test
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres?schema=public
+          DIRECT_URL: postgresql://postgres:postgres@localhost:5432/postgres?schema=public
+          REDIS_URL: redis://localhost:6379
+          SUPABASE_URL: http://localhost:54321
+          SUPABASE_ANON_KEY: test-anon-key
+          SUPABASE_SERVICE_ROLE_KEY: test-service-role-key
+          SUPABASE_JWT_SECRET: test-jwt-secret-at-least-32-bytes-long
+          INTERNAL_SERVICE_TOKEN: test-internal-service-token-0123456
+          PUBLIC_APP_URL: http://localhost:3000
+          PUBLIC_AI_URL: http://localhost:8001
+          ADMIN_EMAILS: admin@remy.local
+        run: pnpm test
+      - name: Format check
+        run: pnpm format:check
+
+  py:
+    name: Python — ruff, mypy, pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+      - name: Sync deps
+        working-directory: services/ai
+        run: |
+          ~/.local/bin/uv sync --all-extras
+      - name: Ruff
+        working-directory: services/ai
+        run: ~/.local/bin/uv run ruff check app tests
+      - name: Pytest
+        working-directory: services/ai
+        env:
+          INTERNAL_SERVICE_TOKEN: test-internal-service-token-0123456
+          MOCK_MODAL: '1'
+          MOCK_TIKTOK: '1'
+        run: ~/.local/bin/uv run pytest -q

@@ -1,0 +1,471 @@
+// Remy — Prisma schema
+// Database: Supabase Postgres 16
+// Migrations live in ./migrations and are applied via `prisma migrate deploy`.
+//
+// Conventions:
+//   - snake_case column names via @map so SQL is idiomatic, camelCase TS via model fields.
+//   - created_at/updated_at on every row. Hard deletes are rare; use archived_at.
+//   - every user-scoped table has a user_id FK with onDelete: Cascade.
+//   - credit transactions are append-only; enforced at migration level (TRIGGER).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider          = "postgresql"
+  url               = env("DATABASE_URL")
+  directUrl         = env("DIRECT_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Accounts — User mirrors Supabase auth.users.id (UUID). We never store the
+// password; Supabase handles that. `supabase_user_id` is the bridge.
+// ---------------------------------------------------------------------------
+
+model User {
+  id              String   @id @default(uuid()) @db.Uuid
+  supabaseUserId  String   @unique @map("supabase_user_id") @db.Uuid
+  email           String   @unique
+  name            String?
+  avatarUrl       String?  @map("avatar_url")
+  role            UserRole @default(user)
+  onboardedAt     DateTime? @map("onboarded_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  archivedAt      DateTime? @map("archived_at")
+
+  balance         CreditBalance?
+  transactions    CreditTransaction[]
+  subscription    Subscription?
+  invoices        Invoice[]
+  characters      Character[]
+  trendSources    TrendSource[]
+  jobs            Job[]
+  generations     Generation[]
+  webhookEvents   WebhookEvent[]
+
+  @@index([email])
+  @@map("users")
+}
+
+enum UserRole {
+  user
+  admin
+}
+
+// ---------------------------------------------------------------------------
+// Credits — single-row balance per user, append-only transaction ledger.
+// Invariant: current_balance = sum(applied transactions)
+// Invariant: current_balance >= 0 (CHECK constraint at SQL level)
+// ---------------------------------------------------------------------------
+
+model CreditBalance {
+  id               String   @id @default(uuid()) @db.Uuid
+  userId           String   @unique @map("user_id") @db.Uuid
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// applied credits available for new reservations
+  currentBalance   Int      @default(0) @map("current_balance")
+  /// reserved-but-not-charged credits (pending transactions)
+  pendingBalance   Int      @default(0) @map("pending_balance")
+  /// lifetime credits granted (for analytics + reporting)
+  lifetimeGranted  Int      @default(0) @map("lifetime_granted")
+  /// lifetime credits spent (applied usage_charge transactions)
+  lifetimeSpent    Int      @default(0) @map("lifetime_spent")
+
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@map("credit_balances")
+}
+
+model CreditTransaction {
+  id              String                  @id @default(uuid()) @db.Uuid
+  userId          String                  @map("user_id") @db.Uuid
+  user            User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  kind            CreditTransactionKind
+  status          CreditTransactionStatus @default(applied)
+  /// positive = grant, negative = spend, always in whole credits
+  amount          Int
+  /// human-readable reason (admin adjustments etc.)
+  reason          String?
+  /// FK to whichever domain entity caused this (Job.id, Invoice.id, etc.)
+  referenceKind   String?                 @map("reference_kind")
+  referenceId     String?                 @map("reference_id") @db.Uuid
+  /// arbitrary context (Stripe IDs, admin user IDs, etc.)
+  metadata        Json?                   @default("{}")
+
+  createdAt       DateTime                @default(now()) @map("created_at")
+
+  @@index([userId, createdAt])
+  @@index([status, referenceId])
+  @@map("credit_transactions")
+}
+
+enum CreditTransactionKind {
+  purchase
+  subscription_grant
+  usage_reserve
+  usage_charge
+  usage_refund
+  adjustment
+  bonus
+  expiry
+}
+
+enum CreditTransactionStatus {
+  pending
+  applied
+  cancelled
+}
+
+// ---------------------------------------------------------------------------
+// Billing — mirror of Stripe. We never treat this as source of truth.
+// ---------------------------------------------------------------------------
+
+model Subscription {
+  id                   String              @id @default(uuid()) @db.Uuid
+  userId               String              @unique @map("user_id") @db.Uuid
+  user                 User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  plan                 PlanId              @default(free)
+  status               SubscriptionStatus  @default(active)
+  stripeCustomerId     String?             @unique @map("stripe_customer_id")
+  stripeSubscriptionId String?             @unique @map("stripe_subscription_id")
+
+  currentPeriodStart   DateTime?           @map("current_period_start")
+  currentPeriodEnd     DateTime?           @map("current_period_end")
+  cancelAtPeriodEnd    Boolean             @default(false) @map("cancel_at_period_end")
+
+  createdAt            DateTime            @default(now()) @map("created_at")
+  updatedAt            DateTime            @updatedAt       @map("updated_at")
+
+  @@map("subscriptions")
+}
+
+enum PlanId {
+  free
+  starter
+  pro
+  scale
+}
+
+enum SubscriptionStatus {
+  active
+  past_due
+  canceled
+  paused
+  unpaid
+  incomplete
+}
+
+model Invoice {
+  id                 String         @id @default(uuid()) @db.Uuid
+  userId             String         @map("user_id") @db.Uuid
+  user               User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  stripeInvoiceId    String         @unique @map("stripe_invoice_id")
+  status             InvoiceStatus
+  /// amount in minor units (cents)
+  amountDue          Int            @map("amount_due")
+  amountPaid         Int            @map("amount_paid")
+  currency           String         @default("usd")
+  /// credits granted by this invoice (topup or subscription)
+  creditsGranted     Int            @default(0) @map("credits_granted")
+  hostedInvoiceUrl   String?        @map("hosted_invoice_url")
+  pdfUrl             String?        @map("pdf_url")
+
+  issuedAt           DateTime       @default(now()) @map("issued_at")
+  paidAt             DateTime?      @map("paid_at")
+
+  @@index([userId, issuedAt])
+  @@map("invoices")
+}
+
+enum InvoiceStatus {
+  draft
+  open
+  paid
+  uncollectible
+  void
+}
+
+// ---------------------------------------------------------------------------
+// Characters — the AI influencer identity.
+// ---------------------------------------------------------------------------
+
+model Character {
+  id            String    @id @default(uuid()) @db.Uuid
+  userId        String    @map("user_id") @db.Uuid
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name          String
+  description   String?
+  /// the dataset this character was trained from
+  datasetId     String?   @map("dataset_id") @db.Uuid
+  dataset       CharacterDataset? @relation(fields: [datasetId], references: [id])
+  /// the currently-active trained LoRA (null until training completes)
+  activeLoraId  String?   @map("active_lora_id") @db.Uuid
+  activeLora    LoraModel? @relation("ActiveLora", fields: [activeLoraId], references: [id])
+
+  archived      Boolean   @default(false)
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  datasets      CharacterDataset[] @relation("AllDatasets")
+  loras         LoraModel[] @relation("AllLoras")
+  generations   Generation[]
+  jobs          Job[]
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("characters")
+}
+
+model CharacterDataset {
+  id                String    @id @default(uuid()) @db.Uuid
+  characterId       String    @map("character_id") @db.Uuid
+  character         Character @relation("AllDatasets", fields: [characterId], references: [id], onDelete: Cascade)
+
+  faceImageKey      String    @map("face_image_key")
+  referenceImageKeys String[] @map("reference_image_keys")
+  imageCount        Int       @map("image_count")
+  status            DatasetStatus @default(pending)
+  processedKeys     String[]  @default([]) @map("processed_keys")
+  error             String?
+
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  activeForCharacters Character[]
+
+  @@map("character_datasets")
+}
+
+enum DatasetStatus {
+  pending
+  processing
+  ready
+  failed
+}
+
+model LoraModel {
+  id            String    @id @default(uuid()) @db.Uuid
+  characterId   String    @map("character_id") @db.Uuid
+  character     Character @relation("AllLoras", fields: [characterId], references: [id], onDelete: Cascade)
+
+  version       Int       @default(1)
+  weightsKey    String?   @map("weights_key")
+  status        LoraStatus @default(pending)
+  metrics       Json?     @default("{}")
+  trainedOn     DateTime? @map("trained_on")
+
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  activeForCharacters Character[] @relation("ActiveLora")
+
+  @@unique([characterId, version])
+  @@map("lora_models")
+}
+
+enum LoraStatus {
+  pending
+  training
+  ready
+  failed
+}
+
+// ---------------------------------------------------------------------------
+// Trends
+// ---------------------------------------------------------------------------
+
+model TrendSource {
+  id          String          @id @default(uuid()) @db.Uuid
+  userId      String          @map("user_id") @db.Uuid
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  kind        TrendSourceKind
+  handle      String
+  label       String?
+  active      Boolean         @default(true)
+  lastIngestAt DateTime?      @map("last_ingest_at")
+
+  createdAt   DateTime        @default(now()) @map("created_at")
+  updatedAt   DateTime        @updatedAt      @map("updated_at")
+
+  suggestedVideos SuggestedVideo[]
+
+  @@unique([userId, kind, handle])
+  @@map("trend_sources")
+}
+
+enum TrendSourceKind {
+  tiktok_creator
+  tiktok_hashtag
+  category
+}
+
+model SuggestedVideo {
+  id              String        @id @default(uuid()) @db.Uuid
+  sourceId        String        @map("source_id") @db.Uuid
+  source          TrendSource   @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  platformId      String        @map("platform_id")
+  url             String
+  thumbnailUrl    String?       @map("thumbnail_url")
+  creatorHandle   String?       @map("creator_handle")
+  caption         String?
+  durationSeconds Int?          @map("duration_seconds")
+  likeCount       Int?          @map("like_count")
+  viewCount       Int?          @map("view_count")
+  shareCount      Int?          @map("share_count")
+  commentCount    Int?          @map("comment_count")
+  engagementScore Float         @default(0) @map("engagement_score")
+  simplicityScore Float         @default(0) @map("simplicity_score")
+  rankScore       Float         @default(0) @map("rank_score")
+  publishedAt     DateTime?     @map("published_at")
+  ingestedAt      DateTime      @default(now()) @map("ingested_at")
+
+  generations     Generation[]
+
+  @@unique([sourceId, platformId])
+  @@index([rankScore(sort: Desc)])
+  @@map("suggested_videos")
+}
+
+// ---------------------------------------------------------------------------
+// Jobs — the universal work envelope
+// ---------------------------------------------------------------------------
+
+model Job {
+  id              String     @id @default(uuid()) @db.Uuid
+  userId          String     @map("user_id") @db.Uuid
+  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  characterId     String?    @map("character_id") @db.Uuid
+  character       Character? @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  kind            JobKind
+  status          JobStatus  @default(queued)
+  reservedCredits Int        @default(0) @map("reserved_credits")
+  chargedCredits  Int        @default(0) @map("charged_credits")
+  refundedCredits Int        @default(0) @map("refunded_credits")
+  /// reservation transaction created at enqueue time; null for free jobs
+  reservationTxId String?    @map("reservation_tx_id") @db.Uuid
+
+  input           Json       @default("{}")
+  output          Json?      @default("{}")
+  progress        Json?      @default("{\"percent\": 0, \"stage\": \"queued\"}")
+  error           String?
+  externalJobId   String?    @map("external_job_id")
+
+  startedAt       DateTime?  @map("started_at")
+  finishedAt      DateTime?  @map("finished_at")
+  attempts        Int        @default(0)
+
+  createdAt       DateTime   @default(now()) @map("created_at")
+  updatedAt       DateTime   @updatedAt @map("updated_at")
+
+  generation      Generation?
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([status, kind])
+  @@map("jobs")
+}
+
+enum JobKind {
+  lora_training
+  outfit_analysis
+  reference_image
+  outfit_image
+  video_generation
+  video_regeneration
+  trend_ingest
+  trend_analysis
+}
+
+enum JobStatus {
+  queued
+  reserved
+  preparing
+  running
+  rendering
+  uploading
+  completed
+  failed
+  cancelled
+  refunded
+}
+
+// ---------------------------------------------------------------------------
+// Generations — the output of a video job + user review
+// ---------------------------------------------------------------------------
+
+model Generation {
+  id                 String     @id @default(uuid()) @db.Uuid
+  userId             String     @map("user_id") @db.Uuid
+  user               User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  characterId        String     @map("character_id") @db.Uuid
+  character          Character  @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  jobId              String     @unique @map("job_id") @db.Uuid
+  job                Job        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  suggestedVideoId   String?    @map("suggested_video_id") @db.Uuid
+  suggestedVideo     SuggestedVideo? @relation(fields: [suggestedVideoId], references: [id])
+
+  referenceVideoUrl  String?    @map("reference_video_url")
+  outputVideoKey     String?    @map("output_video_key")
+  outputThumbnailKey String?    @map("output_thumbnail_key")
+  durationSeconds    Int        @map("duration_seconds")
+  resolution         String
+  outfitPrompt       String?    @map("outfit_prompt")
+  seed               BigInt?
+
+  decision           GenerationDecision @default(pending)
+  decidedAt          DateTime?  @map("decided_at")
+
+  createdAt          DateTime   @default(now()) @map("created_at")
+  updatedAt          DateTime   @updatedAt @map("updated_at")
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([characterId, createdAt(sort: Desc)])
+  @@map("generations")
+}
+
+enum GenerationDecision {
+  pending
+  approved
+  discarded
+  regenerated
+}
+
+// ---------------------------------------------------------------------------
+// Webhooks — idempotency ledger for Stripe and Modal
+// ---------------------------------------------------------------------------
+
+model WebhookEvent {
+  id          String          @id @default(uuid()) @db.Uuid
+  source      WebhookSource
+  eventId     String          @map("event_id")
+  eventType   String          @map("event_type")
+  userId      String?         @map("user_id") @db.Uuid
+  user        User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  receivedAt  DateTime        @default(now()) @map("received_at")
+  processedAt DateTime?       @map("processed_at")
+  payload     Json
+  error       String?
+
+  @@unique([source, eventId])
+  @@index([source, receivedAt])
+  @@map("webhook_events")
+}
+
+enum WebhookSource {
+  stripe
+  modal
+  ai
+  tiktok
+}
